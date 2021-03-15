@@ -1,0 +1,86 @@
+---
+title: "Final Project (3)"
+author: "Melissa Mata"
+date: "11/30/2020"
+output: html_document
+---
+
+```{r}
+text2 <- pre_process_corpus(ted_talks, "transcript",
+                           replace_numbers = TRUE,
+                           replace_punctuations = TRUE,
+                           root_gen = "lemmatize",
+                           output_corpus = TRUE)
+
+```
+
+
+
+```{r}
+tokenizer2 <- function(x) {unlist(lapply(ngrams(words(x), 1), paste, collapse = " "), 
+                                  use.names = FALSE)}
+
+lbound2 <- round(0.015* length(text2))
+ubound2 <- round(0.8 * length(text2))
+
+dtm1 <- as.matrix(DocumentTermMatrix(text2,
+                                    control = list(tokenize = tokenizer2,
+                                                   bounds = list(global = c(lbound2, ubound2)))))
+
+
+
+tokenizer2 <- function(x) {unlist(lapply(ngrams(words(x), 2), paste, collapse = " "),
+                                  use.names = FALSE)}
+
+dtm2 <- as.matrix(DocumentTermMatrix(text2,
+                                    control = list(tokenize = tokenizer2,
+                                                   bounds = list(global = c(lbound2, ubound2)))))
+
+tokenizer2 <- function(x) {unlist(lapply(ngrams(words(x), 3), paste, collapse = " "), 
+                                  use.names = FALSE)}
+
+dtm3 <- as.matrix(DocumentTermMatrix(text2,
+                                    control = list(tokenize = tokenizer2,
+                                                   bounds = list(global = c(lbound2, ubound2)))))
+
+dtm <- cbind(dtm1, dtm2)
+dtm <- cbind(dtm, dtm3)
+dim(dtm)
+```
+
+```{r}
+row_total <- apply(dtm, 1, sum)
+dtm <- dtm[row_total>0,]
+
+class(dtm)
+
+isS4(dtm)
+number_docs <- nrow(dtm)
+terms_docs <- colSums(dtm > 0)
+idf <- log(number_docs/terms_docs)
+tf_idf <- t(t(dtm) * idf)
+names(tf_idf) <- colnames(dtm)
+
+ep <- ted_talks$headline[0:2386]
+rownames(tf_idf) <- ep
+
+tf_idf_transcripts <- data.frame(episode = ted_talks$id[0:2386],
+                                 as.data.frame(tf_idf))
+tf_idf_transcripts <- as.matrix(tf_idf_transcripts)
+```
+
+
+```{r}
+similar <- sim2(tf_idf_transcripts, method = "cosine")
+get_similar_episodes <- function(similar, transcripts, n_recommendations = 3){
+  sort(similar[transcripts, ], decreasing = TRUE)[1:(2 + n_recommendations)]
+}
+
+get_similar_episodes(similar, 39)
+
+```
+
+
+
+
+
