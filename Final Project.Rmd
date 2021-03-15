@@ -1,0 +1,247 @@
+---
+title: "Econ 691 - Final Project"
+output:
+  html_document:
+    df_print: paged
+---
+
+I. Summary of Data
+```{r}
+ted_talks <- read.csv("~/Documents/Fall 2020/Econ 691 - NLP/Datasets/TED_Talks_by_ID_plus-transcripts-and-LIWC-and-MFT-plus-views (1).csv", comment.char="#")
+```
+
+Load NLP enviroment, that includes all neccessary packages and pre_processing function.
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+load("~/Documents/Fall 2020/Econ 691 - NLP/Environments/NLP.RData")
+packages <- c("plyr",
+              "dplyr",
+              "reshape2",
+              "ggplot2",
+              "textclean",
+              "tm",
+              "textstem",
+              "tidyverse",
+             "tidytext",
+             "countrycode",
+             "text2vec",
+             "Rcpp",
+             "glmnet",
+             "widyr",
+             "irlba",
+             "Matrix",
+             "stm",
+             "pals",
+             "viridis",
+             "textdata",
+             "sentimentr",
+             "caTools",
+             "randomForest",
+             "naivebayes",
+             "caret",
+             "e1071",
+             "LiblineaR",
+             "neuralnet",
+             "data.table",
+             "neuralnet",
+             "topicmodels",
+             "textmineR",
+             "recommenderlab",
+             "ggthemes")
+nlp_pak(packages) 
+
+```
+
+Split data into train and test sets to minimize the effects of data discrepancies and overfitting.
+```{r}
+set.seed(94121)
+
+rand <- runif(nrow(ted_talks))
+sets <- ifelse(rand < 0.9, 'train', 'test')
+ted_talks$set <- sets
+
+train <- ted_talks[ted_talks$set == 'train',]
+test <- ted_talks[ted_talks$set == 'test',]
+```
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+text <- pre_process_corpus(train, "transcript",
+                           replace_numbers = TRUE,
+                           replace_punctuations = TRUE,
+                           extra_stopwords = c("can", "people", "applause"),
+                           root_gen = "lemmatize")
+
+text_test <- pre_process_corpus(test, "transcript",
+                           replace_numbers = TRUE,
+                           replace_punctuations = TRUE,
+                           extra_stopwords = c("can", "people", "applause"),
+                           root_gen = "stem")
+
+```
+
+```{r}
+#Create Train/Test Sets
+
+it_train <- itoken(text, 
+                   tokenizer = word_tokenizer,
+                   ids = train$id)
+
+vocab <- create_vocabulary(it_train, ngram = c(1,3))
+
+lbound <- 2
+ubound <- 200
+
+vocab <- vocab[vocab$doc_count > lbound & vocab$doc_count < ubound,]
+
+vectorizer <- vocab_vectorizer(vocab)
+dtm_train <- create_dtm(it_train, vectorizer)
+
+it_test <- itoken(text_test,
+                  tokenizer = word_tokenizer,
+                  ids = test$id)
+dtm_test <- create_dtm(it_test, vectorizer)
+```
+
+Document Term Matirx, rows correspond to documents in the collection and columns correspond to terms.
+```{r}
+dim(dtm_train)
+dim(dtm_test)
+```
+
+Calculating the Optimal K. First tested, c(3,23) and optimal K = 21. Tested c(20,30) second, and got an optimal K of 21 again. K determins the optimal number of topics. 
+```{r}
+#Find Optimal K, optimal number of topics
+docs <- apply(dtm_train, 1, function(x){
+  tmp <- as.data.frame(x)
+  tmp$vocab <- 1:nrow(tmp)
+  tmp <- tmp[tmp[,1] > 0,]
+  tmp <- as.matrix.data.frame(t(tmp[,c(2,1)]))
+  return(tmp)
+})
+```
+
+```{r, warning = FALSE, results = FALSE}
+k_results <- searchK(documents = docs,
+                     vocab = colnames(dtm_train),
+                     K = c(21:25))
+```
+
+
+```{r}
+K <- k_results$results$K[which.max(k_results$results$heldout)]
+K
+```
+After building DTM, convert to sparse corpus.
+
+Latent Dirichlet Allocation (LDA), topic modeling technique that automatically discovers themes (topics) in a collection of documents (corpus). Dirichlet refers to the Dirichlet Distribution, which both provides good approximations to word distributions in documents and is computationally convenient.
+```{r, message=FALSE, warning=FALSE}
+sparse_corpus <- Matrix(dtm_train, sparse = TRUE)
+
+LDA_model <- stm(sparse_corpus,
+                 init.type = 'LDA',
+                 K = 21)
+```
+
+II. Analysis
+
+LDA Label Topics
+Includes four different type of word weightings, print with label topics.
+
+The four types include:
+  Highest Probability: Gives us the words within each topic with the highest probability. This is inferred directly from topic word distributin parameter beta. 
+  
+  FREX: Includes words that are both frequent and exclusive, and identifies words that distinguish topics. Calculated by taking the harmonic mean of rank by probability within the topic frequency and then ranked by distribution of topic given word (exlusivity).
+  
+  Lift: Caclulates lift metric. Lift is calculated by dividing the topic word distribution by the empirical word count probability distribution. 
+  
+  Score: Calculates score metric.A K by V matrix containing the log probabilities of seeing word v conditional on topic k. 
+  
+```{r}
+#Summary of LDA Topic
+labelTopics(LDA_model, n = 7)
+```
+
+
+```{r}
+lda <- as.data.frame(t(labelTopics(LDA_model, n = 10)$prob))
+lda
+```
+
+```{r}
+lda_topic_content <- as.data.frame(t(exp(LDA_model$beta$logbeta[[1]])))
+
+topic_names <- apply(lda_topic_content, 2, function(x) {paste(LDA_model$vocab[order(x,
+                                      decreasing = T)[1:6]], collapse = " ")})
+
+topic_names
+```
+
+
+```{r}
+#LDA Data Frame for Visualization
+topic_prevalence <- as.data.frame(LDA_model$theta)
+lda_df <- topic_prevalence
+colnames(lda_df) <- topic_names
+lda_df$headline <- as.character(train$headline)
+lda_df$Speaker <- as.character(train$speaker)
+lda_df$ID <- as.character(train$id)
+lda_df <- melt(lda_df, id.vars = 'ID', value.name = 'Proportion', variable.name = 'Topic_Names')
+              
+View(lda_df)
+```
+
+
+Structural Topic Model (STM), allows examination of relationship between topics and various covariates of interest. Improves the assignment of words to latent topics in a corpus. 
+```{r, message=FALSE, warning=FALSE}
+stm_model <- stm(sparse_corpus,
+                 init.type = 'Spectral',
+                 K = 21)
+labelTopics(stm_model)
+```
+
+```{r}
+stm <- as.data.frame(t(labelTopics(stm_model, n = 10)$prob))
+stm
+```
+
+```{r}
+stm_topics <- tidy(stm_model, matrix = "gamma")%>%
+  group_by() %>%
+  top_n(21, gamma) %>%
+  ungroup() %>%
+  arrange(topic)
+stm_topics
+```
+
+```{r}
+#Reccomendation System
+cosine_sim <- function(a, b) crossprod(a,b)/sqrt(crossprod(a)*crossprod(b))
+
+calc_cos_sim <- function(data,
+                         headline,
+                         tags = tags,
+                         return_n = 5) {
+  
+  episode_index <- which(colnames(headline) == id)
+  
+  cos_sim <- apply(headline, 2,
+                   FUN = function(y)
+                     cosine_sim(headline[,tags], y))
+  
+  data_frame(id = names(cosine_sim), cosine_sim = cosine_sim) %>%
+    filter(id != id) %>% 
+    inner_join(headline) %>%
+    arrange(desc(cosine_sim)) %>%
+    top_n(return_n, cosine_sim) %>%
+    select(id, headline, speaker, cosine_sim)
+}
+  
+```
+
+```{r}
+headline <- 'How to rebuild a broken state'
+knitr::kable(suggest_episodes(headline))
+```
+
+
+
+
